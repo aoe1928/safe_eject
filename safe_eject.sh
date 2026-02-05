@@ -1,33 +1,27 @@
 #!/bin/zsh
 
 # ==========================================
-# 設定と準備
+# 1. Time Machine の監視と停止
 # ==========================================
 
 echo "🚀 安全な一括アンマウント処理を開始します..."
 
 # Time Machineの状態を確認する関数
 function is_tm_running() {
-    # tmutil status の出力に "Running = 1" があるか確認
     tmutil status | grep -q "Running = 1"
 }
-
-# ==========================================
-# 1. Time Machine の制御
-# ==========================================
 
 if is_tm_running; then
     echo "⚠️ Time Machineバックアップが実行中です。"
     echo "🛑 バックアップを停止しています..."
     
-    # バックアップ停止コマンド
     tmutil stopbackup
     
-    # 完全に停止するまでループで待機（最大60秒待つ例）
-    local wait_count=0
+    # 完全に停止するまで待機（最大60秒）
+    wait_count=0
     while is_tm_running; do
         if (( wait_count > 60 )); then
-            echo "❌ Time Machineの停止に時間がかかりすぎています。処理を中断します。"
+            echo "❌ 停止できませんでした。処理を中断します。"
             exit 1
         fi
         printf "."
@@ -36,53 +30,53 @@ if is_tm_running; then
     done
     echo "\n✅ Time Machineバックアップが停止しました。"
 else
-    echo "ℹ️ Time Machineは実行されていません。次に進みます。"
+    echo "ℹ️ Time Machineは実行されていません。"
 fi
 
 # ==========================================
-# 2. ディスク書き込みの同期
+# 2. キャッシュ書き込み (sync)
 # ==========================================
-
-echo "💾 キャッシュをディスクに書き込んでいます (sync)..."
+echo "💾 キャッシュをディスクに書き込んでいます..."
 sync
 
 # ==========================================
-# 3. 外部ボリュームのアンマウント処理
+# 3. アンマウント処理 (除外リスト方式)
 # ==========================================
 
-# /Volumes 内のディレクトリをチェック
 for disk in /Volumes/*; do
-    # ディレクトリが存在しない場合（/Volumesが空など）はスキップ
+    # 存在チェック
     [ -e "$disk" ] || continue
 
-    # .timemachine などの特殊ディレクトリはスキップ
-    if [[ "$disk" == *".timemachine"* ]]; then
+    # ---------------------------------------------------------
+    # 除外リスト（ここを最初のコードと同じロジックに戻しました）
+    # ---------------------------------------------------------
+    # 1. Macintosh HD (標準のシステムドライブ名)
+    # 2. Recovery (リカバリ領域)
+    # 3. .timemachine (Time Machineの一時マウント領域)
+    # 4. com.apple.TimeMachine (ローカルスナップショット等)
+    # ---------------------------------------------------------
+    if [[ "$disk" == "/Volumes/Macintosh HD" || \
+          "$disk" == "/Volumes/Recovery" || \
+          "$disk" == "/Volumes/.timemachine" || \
+          "$disk" == *"/com.apple.TimeMachine"* ]]; then
+        # システム系はスキップしてログも出さない（あるいはデバッグで出す）
         continue
     fi
 
-    # 【重要】diskutil info を使って「取り出し可能(Ejectable)」なディスクか判定
-    # システムドライブやRecovery領域を名前指定で除外するより確実です
-    is_ejectable=$(diskutil info "$disk" | grep "Ejectable" | grep "Yes")
+    # ここに来たものはすべてアンマウント対象
+    echo "----------------------------------------"
+    echo "Stopping: ${disk:t}"
 
-    if [[ -n "$is_ejectable" ]]; then
-        echo "----------------------------------------"
-        echo "⏏️  Ejecting: ${disk:t} ..." # :t はパスの末尾(ファイル名)のみ表示するzsh修飾子
-
-        # アンマウント実行
-        if diskutil eject "$disk"; then
-            echo "✅ 成功: ${disk:t} を取り外しました。"
-        else
-            echo "⚠️ 失敗: ${disk:t} は使用中の可能性があります。"
-        fi
-        
-        # 連続処理時の安定性のため少し待つ
-        sleep 1
+    # eject実行
+    if diskutil eject "$disk"; then
+        echo "✅ 成功"
     else
-        # Ejectable: No のディスク（内蔵SSDなど）は無視してログも出さない（あるいはデバッグ用に出す）
-        # echo "スキップ (内蔵/システム): ${disk:t}"
-        continue
+        echo "⚠️ 失敗 (使用中の可能性があります)"
     fi
+
+    # 2秒待機
+    sleep 2
 done
 
 echo "----------------------------------------"
-echo "🎉 処理が完了しました。"
+echo "✅ すべての外部ドライブの処理が完了しました。"
